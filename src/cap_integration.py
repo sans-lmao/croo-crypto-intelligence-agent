@@ -6,12 +6,14 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 from config import CROO_AGENT_ID, CROO_PRIVATE_KEY
 from src.analysis import MarketAnalysisEngine
+from src.payment_tracker import PaymentTracker
 
 class CAPRequest(BaseModel):
     """CROO Agent Protocol Request"""
     agent_id: str
     action: str
     payload: Dict[str, Any]
+    caller_agent_id: str = ""  # Which agent is calling us
     nonce: str = Field(default_factory=lambda: str(datetime.now().timestamp()))
     signature: Optional[str] = None
 
@@ -22,14 +24,16 @@ class CAPResponse(BaseModel):
     result: Dict[str, Any]
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
     message_id: str
+    transaction_id: str = ""  # For payment tracking
 
 class CROOCAPIntegration:
-    """Handles CROO Agent Protocol (CAP) integration"""
+    """Handles CROO Agent Protocol (CAP) integration with payment tracking"""
     
     def __init__(self):
-        self.agent_id = CROO_AGENT_ID
+        self.agent_id = CROO_AGENT_ID or "croo-crypto-intelligence-agent"
         self.private_key = CROO_PRIVATE_KEY
         self.analysis_engine = MarketAnalysisEngine()
+        self.payment_tracker = PaymentTracker()
         self.supported_actions = [
             'analyze_market',
             'get_sentiment',
@@ -39,7 +43,7 @@ class CROOCAPIntegration:
         ]
     
     def process_cap_call(self, request: CAPRequest) -> CAPResponse:
-        """Process incoming CAP call"""
+        """Process incoming CAP call from another agent"""
         # Verify signature
         if not self._verify_signature(request):
             return CAPResponse(
@@ -73,13 +77,31 @@ class CROOCAPIntegration:
             else:
                 result = {'error': 'Unknown action'}
             
+            # Track payment for this A2A call
+            payment = self.payment_tracker.record_cap_call(
+                caller_agent_id=request.caller_agent_id or "unknown",
+                service_used=request.action,
+                request_data=request.payload,
+                response_data=result,
+                success=True
+            )
+            
             return CAPResponse(
                 agent_id=self.agent_id,
                 status='success',
                 result=result,
-                message_id=request.nonce
+                message_id=request.nonce,
+                transaction_id=payment.transaction_id
             )
         except Exception as e:
+            # Track failed call
+            self.payment_tracker.record_cap_call(
+                caller_agent_id=request.caller_agent_id or "unknown",
+                service_used=request.action,
+                request_data=request.payload,
+                response_data={'error': str(e)},
+                success=False
+            )
             return CAPResponse(
                 agent_id=self.agent_id,
                 status='error',
@@ -122,7 +144,6 @@ class CROOCAPIntegration:
             return {'error': 'target_price is required'}
         
         # In production, this would store the alert in a database
-        # and check it periodically
         return {
             'symbol': symbol,
             'target_price': target_price,
@@ -165,3 +186,15 @@ class CROOCAPIntegration:
             payload_str.encode(),
             hashlib.sha256
         ).hexdigest()
+    
+    def get_payment_stats(self) -> Dict[str, Any]:
+        """Get payment statistics"""
+        return self.payment_tracker.get_statistics()
+    
+    def create_settlement_batch(self) -> Dict[str, Any]:
+        """Create a batch for on-chain settlement"""
+        return self.payment_tracker.create_settlement_batch()
+    
+    def settle_on_chain(self, tx_hash: str) -> Dict[str, Any]:
+        """Mark settlement as complete"""
+        return self.payment_tracker.settle_batch_on_chain(tx_hash)
