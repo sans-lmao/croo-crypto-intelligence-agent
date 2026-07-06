@@ -6,7 +6,7 @@ fastapi==0.104.1
 uvicorn==0.24.0
 pytest==7.4.3
 python-dateutil==2.8.2
-numpy==1.24.3
-pandas==2.0.3
-scikit-learn==1.3.2
+numpy
+pandas
+scikit-learn
 croo-sdk
